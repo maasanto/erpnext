@@ -315,7 +315,15 @@ def complete_contact_details(party_details):
 				"department as contact_department",
 			],
 			as_dict=True,
-		)
+		) or {
+			"contact_person": None,
+			"contact_display": None,
+			"contact_email": None,
+			"contact_mobile": None,
+			"contact_phone": None,
+			"contact_designation": None,
+			"contact_department": None,
+		}
 	else:
 		contact_details = {
 			"contact_person": None,
