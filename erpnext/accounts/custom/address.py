@@ -38,17 +38,21 @@ class ERPNextAddress(Address):
 
 	def on_update(self):
 		"""
-		After Address is updated, update the related 'Primary Address' on Customer.
+		After an Address is updated, refresh the rendered 'Primary Address' on any
+		Customer/Supplier that uses it as their primary address.
 		"""
 
 		if hasattr(super(), "on_update"):
 			super().on_update()
 
 		address_display = get_address_display(self.as_dict())
-		filters = {"customer_primary_address": self.name}
-		customers = frappe.db.get_all("Customer", filters=filters, as_list=True)
-		for customer_name in customers:
-			frappe.db.set_value("Customer", customer_name[0], "primary_address", address_display)
+		for doctype, link_fieldname in (
+			("Customer", "customer_primary_address"),
+			("Supplier", "supplier_primary_address"),
+		):
+			parties = frappe.get_all(doctype, filters={link_fieldname: self.name}, pluck="name")
+			for party in parties:
+				frappe.db.set_value(doctype, party, "primary_address", address_display)
 
 
 @frappe.whitelist()
