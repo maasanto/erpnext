@@ -145,31 +145,50 @@ class TestSupplier(ERPNextTestSuite):
 		address.delete()
 
 	def test_primary_contact_details_synced_on_contact_edit(self):
-		supplier = create_supplier(supplier_name="_Test Supplier Primary Contact Sync")
-		supplier.mobile_no = "9000000000"
-		supplier.email_id = "before@example.com"
-		supplier.save()
+		# One Contact shared as the primary contact of two Suppliers - editing it must reach both
+		supplier_a = create_supplier(supplier_name="_Test Supplier Primary Contact Sync A")
+		supplier_b = create_supplier(supplier_name="_Test Supplier Primary Contact Sync B")
 
-		self.assertTrue(supplier.supplier_primary_contact)
-		self.assertEqual(supplier.email_id, "before@example.com")
-		self.assertEqual(supplier.mobile_no, "9000000000")
+		contact = frappe.get_doc(
+			{
+				"doctype": "Contact",
+				"first_name": "Before",
+				"is_primary_contact": 1,
+				"links": [
+					{"link_doctype": "Supplier", "link_name": supplier_a.name},
+					{"link_doctype": "Supplier", "link_name": supplier_b.name},
+				],
+			}
+		)
+		contact.add_email("before@example.com", is_primary=True)
+		contact.add_phone("9000000000", is_primary_mobile_no=True)
+		contact.insert()
 
-		# Editing the linked Contact must propagate to the Supplier without re-selecting it
-		contact = frappe.get_doc("Contact", supplier.supplier_primary_contact)
+		for supplier in (supplier_a, supplier_b):
+			supplier.supplier_primary_contact = contact.name
+			supplier.save()
+
+		# Editing the shared Contact must propagate to every Supplier without re-selecting it
+		contact.reload()
 		contact.email_ids = []
 		contact.phone_nos = []
 		contact.add_email("after@example.com", is_primary=True)
 		contact.add_phone("9111111111", is_primary_mobile_no=True)
 		contact.save()
 
-		supplier.reload()
-		self.assertEqual(supplier.email_id, "after@example.com")
-		self.assertEqual(supplier.mobile_no, "9111111111")
+		for supplier in (supplier_a, supplier_b):
+			supplier.reload()
+			self.assertEqual(supplier.email_id, "after@example.com")
+			self.assertEqual(supplier.mobile_no, "9111111111")
 
-		supplier.delete()
+		supplier_a.delete()
+		supplier_b.delete()
 
 	def test_primary_address_synced_on_address_edit(self):
-		supplier = create_supplier(supplier_name="_Test Supplier Primary Address Sync")
+		# One Address shared as the primary address of two Suppliers - editing it must reach both
+		supplier_a = create_supplier(supplier_name="_Test Supplier Primary Address Sync A")
+		supplier_b = create_supplier(supplier_name="_Test Supplier Primary Address Sync B")
+
 		address = frappe.get_doc(
 			doctype="Address",
 			address_title="_Test Supplier Primary Address Sync",
@@ -178,21 +197,27 @@ class TestSupplier(ERPNextTestSuite):
 			city="_Test City",
 			country="India",
 			is_primary_address=1,
-			links=[dict(link_doctype="Supplier", link_name=supplier.name)],
+			links=[
+				dict(link_doctype="Supplier", link_name=supplier_a.name),
+				dict(link_doctype="Supplier", link_name=supplier_b.name),
+			],
 		).insert()
 
-		supplier.supplier_primary_address = address.name
-		supplier.save()
+		for supplier in (supplier_a, supplier_b):
+			supplier.supplier_primary_address = address.name
+			supplier.save()
 
-		# Editing the linked Address must refresh the rendered primary address on the Supplier
+		# Editing the shared Address must refresh the rendered primary address on every Supplier
 		address.reload()
 		address.address_line1 = "New Line"
 		address.save()
 
-		supplier.reload()
-		self.assertIn("New Line", supplier.primary_address)
+		for supplier in (supplier_a, supplier_b):
+			supplier.reload()
+			self.assertIn("New Line", supplier.primary_address)
 
-		supplier.delete()
+		supplier_a.delete()
+		supplier_b.delete()
 
 
 def create_supplier(**args):

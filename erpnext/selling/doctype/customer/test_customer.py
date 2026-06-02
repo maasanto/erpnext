@@ -360,19 +360,35 @@ class TestCustomer(ERPNextTestSuite):
 		self.assertIsNone(customer.get_notification_email())
 
 	def test_primary_contact_details_synced_on_contact_edit(self):
-		customer = frappe.get_doc(get_customer_dict("_Test Customer Primary Contact Sync")).insert(
+		# One Contact shared as the primary contact of two Customers - editing it must reach both
+		customer_a = frappe.get_doc(get_customer_dict("_Test Customer Primary Contact Sync A")).insert(
 			ignore_permissions=True
 		)
-		customer.mobile_no = "9000000000"
-		customer.email_id = "before@example.com"
-		customer.save()
+		customer_b = frappe.get_doc(get_customer_dict("_Test Customer Primary Contact Sync B")).insert(
+			ignore_permissions=True
+		)
 
-		self.assertTrue(customer.customer_primary_contact)
-		self.assertEqual(customer.email_id, "before@example.com")
-		self.assertEqual(customer.mobile_no, "9000000000")
+		contact = frappe.get_doc(
+			{
+				"doctype": "Contact",
+				"first_name": "Before",
+				"is_primary_contact": 1,
+				"links": [
+					{"link_doctype": "Customer", "link_name": customer_a.name},
+					{"link_doctype": "Customer", "link_name": customer_b.name},
+				],
+			}
+		)
+		contact.add_email("before@example.com", is_primary=True)
+		contact.add_phone("9000000000", is_primary_mobile_no=True)
+		contact.insert()
 
-		# Editing the linked Contact must propagate to the Customer without re-selecting it
-		contact = frappe.get_doc("Contact", customer.customer_primary_contact)
+		for customer in (customer_a, customer_b):
+			customer.customer_primary_contact = contact.name
+			customer.save()
+
+		# Editing the shared Contact must propagate to every Customer without re-selecting it
+		contact.reload()
 		contact.first_name = "Edited"
 		contact.last_name = "Contact"
 		contact.email_ids = []
@@ -381,18 +397,25 @@ class TestCustomer(ERPNextTestSuite):
 		contact.add_phone("9111111111", is_primary_mobile_no=True)
 		contact.save()
 
-		customer.reload()
-		self.assertEqual(customer.email_id, "after@example.com")
-		self.assertEqual(customer.mobile_no, "9111111111")
-		self.assertEqual(customer.first_name, "Edited")
-		self.assertEqual(customer.last_name, "Contact")
+		for customer in (customer_a, customer_b):
+			customer.reload()
+			self.assertEqual(customer.email_id, "after@example.com")
+			self.assertEqual(customer.mobile_no, "9111111111")
+			self.assertEqual(customer.first_name, "Edited")
+			self.assertEqual(customer.last_name, "Contact")
 
-		customer.delete()
+		customer_a.delete()
+		customer_b.delete()
 
 	def test_primary_address_synced_on_address_edit(self):
-		customer = frappe.get_doc(get_customer_dict("_Test Customer Primary Address Sync")).insert(
+		# One Address shared as the primary address of two Customers - editing it must reach both
+		customer_a = frappe.get_doc(get_customer_dict("_Test Customer Primary Address Sync A")).insert(
 			ignore_permissions=True
 		)
+		customer_b = frappe.get_doc(get_customer_dict("_Test Customer Primary Address Sync B")).insert(
+			ignore_permissions=True
+		)
+
 		address = frappe.get_doc(
 			doctype="Address",
 			address_title="_Test Customer Primary Address Sync",
@@ -401,21 +424,27 @@ class TestCustomer(ERPNextTestSuite):
 			city="_Test City",
 			country="India",
 			is_primary_address=1,
-			links=[dict(link_doctype="Customer", link_name=customer.name)],
+			links=[
+				dict(link_doctype="Customer", link_name=customer_a.name),
+				dict(link_doctype="Customer", link_name=customer_b.name),
+			],
 		).insert()
 
-		customer.customer_primary_address = address.name
-		customer.save()
+		for customer in (customer_a, customer_b):
+			customer.customer_primary_address = address.name
+			customer.save()
 
-		# Editing the linked Address must refresh the rendered primary address on the Customer
+		# Editing the shared Address must refresh the rendered primary address on every Customer
 		address.reload()
 		address.address_line1 = "New Line"
 		address.save()
 
-		customer.reload()
-		self.assertIn("New Line", customer.primary_address)
+		for customer in (customer_a, customer_b):
+			customer.reload()
+			self.assertIn("New Line", customer.primary_address)
 
-		customer.delete()
+		customer_a.delete()
+		customer_b.delete()
 
 
 def get_customer_dict(customer_name):
