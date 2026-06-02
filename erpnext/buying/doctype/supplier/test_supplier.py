@@ -144,6 +144,56 @@ class TestSupplier(ERPNextTestSuite):
 		# Rollback
 		address.delete()
 
+	def test_primary_contact_details_synced_on_contact_edit(self):
+		supplier = create_supplier(supplier_name="_Test Supplier Primary Contact Sync")
+		supplier.mobile_no = "9000000000"
+		supplier.email_id = "before@example.com"
+		supplier.save()
+
+		self.assertTrue(supplier.supplier_primary_contact)
+		self.assertEqual(supplier.email_id, "before@example.com")
+		self.assertEqual(supplier.mobile_no, "9000000000")
+
+		# Editing the linked Contact must propagate to the Supplier without re-selecting it
+		contact = frappe.get_doc("Contact", supplier.supplier_primary_contact)
+		contact.email_ids = []
+		contact.phone_nos = []
+		contact.add_email("after@example.com", is_primary=True)
+		contact.add_phone("9111111111", is_primary_mobile_no=True)
+		contact.save()
+
+		supplier.reload()
+		self.assertEqual(supplier.email_id, "after@example.com")
+		self.assertEqual(supplier.mobile_no, "9111111111")
+
+		supplier.delete()
+
+	def test_primary_address_synced_on_address_edit(self):
+		supplier = create_supplier(supplier_name="_Test Supplier Primary Address Sync")
+		address = frappe.get_doc(
+			doctype="Address",
+			address_title="_Test Supplier Primary Address Sync",
+			address_type="Billing",
+			address_line1="Old Line",
+			city="_Test City",
+			country="India",
+			is_primary_address=1,
+			links=[dict(link_doctype="Supplier", link_name=supplier.name)],
+		).insert()
+
+		supplier.supplier_primary_address = address.name
+		supplier.save()
+
+		# Editing the linked Address must refresh the rendered primary address on the Supplier
+		address.reload()
+		address.address_line1 = "New Line"
+		address.save()
+
+		supplier.reload()
+		self.assertIn("New Line", supplier.primary_address)
+
+		supplier.delete()
+
 
 def create_supplier(**args):
 	args = frappe._dict(args)

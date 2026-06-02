@@ -359,6 +359,64 @@ class TestCustomer(ERPNextTestSuite):
 		customer.account_manager = None
 		self.assertIsNone(customer.get_notification_email())
 
+	def test_primary_contact_details_synced_on_contact_edit(self):
+		customer = frappe.get_doc(get_customer_dict("_Test Customer Primary Contact Sync")).insert(
+			ignore_permissions=True
+		)
+		customer.mobile_no = "9000000000"
+		customer.email_id = "before@example.com"
+		customer.save()
+
+		self.assertTrue(customer.customer_primary_contact)
+		self.assertEqual(customer.email_id, "before@example.com")
+		self.assertEqual(customer.mobile_no, "9000000000")
+
+		# Editing the linked Contact must propagate to the Customer without re-selecting it
+		contact = frappe.get_doc("Contact", customer.customer_primary_contact)
+		contact.first_name = "Edited"
+		contact.last_name = "Contact"
+		contact.email_ids = []
+		contact.phone_nos = []
+		contact.add_email("after@example.com", is_primary=True)
+		contact.add_phone("9111111111", is_primary_mobile_no=True)
+		contact.save()
+
+		customer.reload()
+		self.assertEqual(customer.email_id, "after@example.com")
+		self.assertEqual(customer.mobile_no, "9111111111")
+		self.assertEqual(customer.first_name, "Edited")
+		self.assertEqual(customer.last_name, "Contact")
+
+		customer.delete()
+
+	def test_primary_address_synced_on_address_edit(self):
+		customer = frappe.get_doc(get_customer_dict("_Test Customer Primary Address Sync")).insert(
+			ignore_permissions=True
+		)
+		address = frappe.get_doc(
+			doctype="Address",
+			address_title="_Test Customer Primary Address Sync",
+			address_type="Billing",
+			address_line1="Old Line",
+			city="_Test City",
+			country="India",
+			is_primary_address=1,
+			links=[dict(link_doctype="Customer", link_name=customer.name)],
+		).insert()
+
+		customer.customer_primary_address = address.name
+		customer.save()
+
+		# Editing the linked Address must refresh the rendered primary address on the Customer
+		address.reload()
+		address.address_line1 = "New Line"
+		address.save()
+
+		customer.reload()
+		self.assertIn("New Line", customer.primary_address)
+
+		customer.delete()
+
 
 def get_customer_dict(customer_name):
 	return {
