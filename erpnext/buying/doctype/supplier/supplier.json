@@ -377,7 +377,6 @@
    "label": "Primary Address and Contact"
   },
   {
-   "description": "Reselect, if the chosen contact is edited after save",
    "fieldname": "supplier_primary_contact",
    "fieldtype": "Link",
    "label": "Primary Contact",
@@ -402,7 +401,6 @@
    "read_only": 1
   },
   {
-   "description": "Reselect, if the chosen address is edited after save",
    "fieldname": "supplier_primary_address",
    "fieldtype": "Link",
    "label": "Primary Address",
@@ -548,7 +546,7 @@
    "link_fieldname": "party"
   }
  ],
- "modified": "2026-05-29 13:03:41.864602",
+ "modified": "2026-06-03 03:30:00.000000",
  "modified_by": "Administrator",
  "module": "Buying",
  "name": "Supplier",
