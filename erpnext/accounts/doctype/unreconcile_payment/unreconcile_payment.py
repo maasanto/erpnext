@@ -8,7 +8,7 @@ from frappe import _, qb
 from frappe.model.document import Document
 from frappe.query_builder import Criterion
 from frappe.query_builder.functions import Abs, Max, Sum
-from frappe.utils.data import comma_and
+from frappe.utils.data import comma_and, get_link_to_form
 
 from erpnext.accounts.utils import (
 	cancel_exchange_gain_loss_journal,
@@ -56,23 +56,59 @@ class UnreconcilePayment(Document):
 		for alloc in allocations:
 			self.append("allocations", alloc)
 
-	def on_submit(self):
-		# todo: more granular unreconciliation
-		for alloc in self.allocations:
-			doc = frappe.get_doc(alloc.reference_doctype, alloc.reference_name)
-			unlink_ref_doc_from_payment_entries(doc, self.voucher_no)
-			cancel_exchange_gain_loss_journal(doc, self.voucher_type, self.voucher_no)
-
-			# update outstanding amounts
-			update_voucher_outstanding(
-				alloc.reference_doctype,
-				alloc.reference_name,
-				alloc.account,
-				alloc.party_type,
-				alloc.party,
+	def is_reconciliation_journal(self) -> bool:
+		"""Journals the Payment Reconciliation tool creates to settle an invoice against its return."""
+		return self.voucher_type == "Journal Entry" and bool(
+			frappe.db.exists(
+				"Journal Entry",
+				{
+					"name": self.voucher_no,
+					"voucher_type": ("in", ("Credit Note", "Debit Note")),
+					"is_system_generated": 1,
+					"docstatus": 1,
+				},
 			)
+		)
 
-			frappe.db.set_value("Unreconcile Payment Entries", alloc.name, "unlinked", 1)
+	def on_submit(self):
+		# The two legs of a reconciliation journal are one allocation: the invoice and the return
+		# settling it. Unlinking a single leg would leave the other voucher at zero outstanding and
+		# invisible to Payment Reconciliation, so the journal is released as a whole.
+		if self.is_reconciliation_journal():
+			journal = frappe.get_doc("Journal Entry", self.voucher_no)
+			invoice_leg, return_leg = journal.accounts
+
+			# The gain/loss journal references the invoice and the return settling it, never this
+			# journal, so cancelling the journal does not reach it. It has to go first, so that the
+			# outstanding amounts recomputed on cancellation no longer count it.
+			cancel_exchange_gain_loss_journal(
+				frappe.get_doc(return_leg.reference_type, return_leg.reference_name),
+				invoice_leg.reference_type,
+				invoice_leg.reference_name,
+			)
+			journal.cancel()
+			frappe.msgprint(
+				_("Journal Entry {0} has been cancelled").format(
+					get_link_to_form("Journal Entry", self.voucher_no)
+				)
+			)
+		else:
+			# todo: more granular unreconciliation
+			for alloc in self.allocations:
+				doc = frappe.get_doc(alloc.reference_doctype, alloc.reference_name)
+				unlink_ref_doc_from_payment_entries(doc, self.voucher_no)
+				cancel_exchange_gain_loss_journal(doc, self.voucher_type, self.voucher_no)
+
+				# update outstanding amounts
+				update_voucher_outstanding(
+					alloc.reference_doctype,
+					alloc.reference_name,
+					alloc.account,
+					alloc.party_type,
+					alloc.party,
+				)
+
+		frappe.db.set_value("Unreconcile Payment Entries", {"parent": self.name}, "unlinked", 1)
 
 
 @frappe.whitelist()

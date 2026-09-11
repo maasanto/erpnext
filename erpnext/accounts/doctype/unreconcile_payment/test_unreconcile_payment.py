@@ -6,6 +6,9 @@ from frappe.utils import today
 
 from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_payment_entry
 from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
+from erpnext.accounts.doctype.unreconcile_payment.unreconcile_payment import (
+	create_unreconcile_doc_for_selection,
+)
 from erpnext.accounts.party import get_party_account
 from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
 from erpnext.buying.doctype.purchase_order.test_purchase_order import create_purchase_order
@@ -541,3 +544,170 @@ class TestUnreconcilePayment(ERPNextTestSuite, AccountsTestMixin):
 
 		po.reload()
 		self.assertEqual(po.advance_paid, 0)
+
+	def test_09_unreconcile_credit_note_journal_from_invoice(self):
+		"""Unreconciling from the invoice must release the credit note as well.
+
+		The UnReconcile dialog on an invoice can only ever select the invoice leg of the
+		reconciliation journal, so the credit note used to stay at zero outstanding and never
+		showed up in Payment Reconciliation again.
+		"""
+		si = self.create_sales_invoice()
+		cr_note = create_sales_invoice(
+			item=self.item,
+			company=self.company,
+			customer=self.customer,
+			debit_to=self.debit_to,
+			posting_date=today(),
+			parent_cost_center=self.cost_center,
+			cost_center=self.cost_center,
+			qty=-1,
+			rate=100,
+			price_list_rate=100,
+			is_return=1,
+			return_against=si.name,
+		)
+		self.assertEqual(cr_note.outstanding_amount, -100)
+
+		pr = frappe.get_doc(
+			{
+				"doctype": "Payment Reconciliation",
+				"company": self.company,
+				"party_type": "Customer",
+				"party": self.customer,
+				"receivable_payable_account": self.debit_to,
+			}
+		)
+		pr.get_unreconciled_entries()
+		pr.allocate_entries(
+			frappe._dict(
+				{
+					"invoices": [x.as_dict() for x in pr.get("invoices") if x.invoice_number == si.name],
+					"payments": [x.as_dict() for x in pr.get("payments") if x.reference_name == cr_note.name],
+				}
+			)
+		)
+		pr.reconcile()
+
+		journal = self.get_reconciliation_journal(si)
+		self.assertTrue(journal)
+
+		[doc.reload() for doc in [si, cr_note]]
+		self.assertEqual(si.outstanding_amount, 0)
+		self.assertEqual(cr_note.outstanding_amount, 0)
+
+		unreconcile = self.unreconcile_journal_from_invoice(journal, si)
+
+		[doc.reload() for doc in [si, cr_note]]
+		self.assertEqual(si.outstanding_amount, 100)
+		self.assertEqual(cr_note.outstanding_amount, -100)
+		self.assertEqual(frappe.db.get_value("Journal Entry", journal, "docstatus"), 2)
+		self.assertTrue(
+			all(frappe.db.get_value("Unreconcile Payment Entries", x.name, "unlinked") for x in unreconcile)
+		)
+
+	def test_10_unreconcile_credit_note_journal_cancels_exchange_gain_loss(self):
+		"""A multi currency reconciliation also posts a gain/loss journal that must be released.
+
+		It references the invoice and the credit note rather than the reconciliation journal, so
+		cancelling the reconciliation journal on its own leaves it posted and a second one is booked
+		when the pair is reconciled again.
+		"""
+		self.create_customer("_Test MC Customer USD", "USD")
+		si = self.create_sales_invoice(do_not_submit=True)
+		si.currency = "USD"
+		si.debit_to = self.debtors_usd
+		si.conversion_rate = 80
+		si.save().submit()
+
+		# standalone: a return invoice is forced to the exchange rate of the invoice it returns,
+		# so it could never carry the rate difference that produces the gain/loss journal
+		cr_note = create_sales_invoice(
+			item=self.item,
+			company=self.company,
+			customer=self.customer,
+			debit_to=self.debtors_usd,
+			posting_date=today(),
+			parent_cost_center=self.cost_center,
+			cost_center=self.cost_center,
+			qty=-1,
+			rate=100,
+			price_list_rate=100,
+			is_return=1,
+			do_not_submit=True,
+		)
+		cr_note.currency = "USD"
+		cr_note.conversion_rate = 75
+		cr_note.save().submit()
+
+		pr = frappe.get_doc(
+			{
+				"doctype": "Payment Reconciliation",
+				"company": self.company,
+				"party_type": "Customer",
+				"party": self.customer,
+				"receivable_payable_account": self.debtors_usd,
+			}
+		)
+		pr.get_unreconciled_entries()
+		pr.allocate_entries(
+			frappe._dict(
+				{
+					"invoices": [x.as_dict() for x in pr.get("invoices") if x.invoice_number == si.name],
+					"payments": [x.as_dict() for x in pr.get("payments") if x.reference_name == cr_note.name],
+				}
+			)
+		)
+		pr.allocation[0].difference_account = "Exchange Gain/Loss - _TC"
+		self.assertNotEqual(pr.allocation[0].difference_amount, 0)
+		pr.reconcile()
+
+		journal = self.get_reconciliation_journal(si)
+		self.assertTrue(journal)
+		# the reconciliation journal plus the gain/loss journal
+		self.assertEqual(self.count_submitted_journal_legs(si), 2)
+
+		self.unreconcile_journal_from_invoice(journal, si)
+
+		[doc.reload() for doc in [si, cr_note]]
+		self.assertEqual(si.outstanding_amount, 100)
+		self.assertEqual(cr_note.outstanding_amount, -100)
+		self.assertEqual(self.count_submitted_journal_legs(si), 0)
+
+	def get_reconciliation_journal(self, si):
+		return frappe.db.get_value(
+			"Journal Entry",
+			{
+				"is_system_generated": 1,
+				"voucher_type": "Credit Note",
+				"reference_type": si.doctype,
+				"reference_name": si.name,
+				"docstatus": 1,
+			},
+		)
+
+	def count_submitted_journal_legs(self, si):
+		return frappe.db.count(
+			"Journal Entry Account",
+			filters={"reference_type": si.doctype, "reference_name": si.name, "docstatus": 1},
+		)
+
+	def unreconcile_journal_from_invoice(self, journal, si):
+		"""Exactly the payload build_selection_map() sends from an invoice form."""
+		create_unreconcile_doc_for_selection(
+			frappe.as_json(
+				[
+					{
+						"company": self.company,
+						"voucher_type": "Journal Entry",
+						"voucher_no": journal,
+						"against_voucher_type": si.doctype,
+						"against_voucher_no": si.name,
+					}
+				]
+			)
+		)
+		return frappe.get_all(
+			"Unreconcile Payment Entries",
+			filters={"reference_name": si.name, "docstatus": 1},
+		)
