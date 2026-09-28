@@ -175,6 +175,54 @@ class TestCouponCode(ERPNextTestSuite):
 		so.submit()
 		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
 
+	def test_invoice_from_sales_order_keeps_single_use_coupon(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+
+		frappe.db.set_value("Coupon Code", "SAVE30", "used", 0)
+		so = make_sales_order(
+			company="_Test Company",
+			warehouse="Stores - _TC",
+			customer="_Test Customer",
+			selling_price_list="_Test Price List",
+			item_code="_Test Tesla Car",
+			rate=5000,
+			qty=1,
+			do_not_save=True,
+		)
+		so.coupon_code = "SAVE30"
+		so.save()
+		so.submit()
+
+		si = make_sales_invoice(so.name)
+		si.insert()
+		si.submit()
+		self.assertEqual(si.coupon_code, "SAVE30")
+		self.assertEqual(si.items[0].rate, 3500)
+		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
+
+		si.reload()
+		si.cancel()
+		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
+
+	def test_credit_note_does_not_use_coupon_again(self):
+		from erpnext.accounts.doctype.sales_invoice.mapper import make_sales_return
+		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
+
+		frappe.db.set_value("Coupon Code", "SAVE30", "used", 0)
+		si = create_sales_invoice(
+			item_code="_Test Tesla Car", warehouse="Stores - _TC", rate=5000, do_not_save=True
+		)
+		si.selling_price_list = "_Test Price List"
+		si.coupon_code = "SAVE30"
+		si.insert()
+		si.submit()
+		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
+
+		credit_note = make_sales_return(si.name)
+		credit_note.insert()
+		credit_note.submit()
+		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
+
 	def test_coupon_without_max_use(self):
 		from erpnext.accounts.doctype.pricing_rule.utils import (
 			update_coupon_code_count,

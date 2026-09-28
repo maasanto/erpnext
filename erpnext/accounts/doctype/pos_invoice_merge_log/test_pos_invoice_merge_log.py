@@ -125,6 +125,26 @@ class TestPOSInvoiceMergeLog(ERPNextTestSuite):
 
 		self.assertNotEqual(pos_inv.consolidated_invoice, pos_inv3.consolidated_invoice)
 
+	def test_consolidated_invoice_keeps_single_use_coupon(self):
+		from erpnext.accounts.doctype.coupon_code.test_coupon_code import test_create_test_data
+
+		test_create_test_data()
+		frappe.db.set_value("Coupon Code", "SAVE30", "used", 0)
+		pos_inv = create_pos_invoice(rate=300, do_not_submit=1)
+		pos_inv.coupon_code = "SAVE30"
+		pos_inv.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 300})
+		pos_inv.save()
+		pos_inv.submit()
+		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
+
+		self.make_closing_entry()
+
+		pos_inv.load_from_db()
+		self.assertEqual(
+			frappe.db.get_value("Sales Invoice", pos_inv.consolidated_invoice, "coupon_code"), "SAVE30"
+		)
+		self.assertEqual(frappe.db.get_value("Coupon Code", "SAVE30", "used"), 1)
+
 	def test_consolidated_credit_note_creation(self):
 		pos_inv = create_pos_invoice(rate=300, do_not_submit=1)
 		pos_inv.append("payments", {"mode_of_payment": "Cash", "account": "Cash - _TC", "amount": 300})

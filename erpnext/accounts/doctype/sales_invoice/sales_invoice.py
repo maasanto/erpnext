@@ -324,7 +324,7 @@ class SalesInvoice(SellingController):
 			self.doctype, self.customer, self.company, self.inter_company_invoice_reference
 		)
 
-		if self.coupon_code:
+		if self.coupon_code and self.counts_coupon_use():
 			validate_coupon_code(self.coupon_code)
 
 		if cint(self.is_pos):
@@ -487,7 +487,7 @@ class SalesInvoice(SellingController):
 			self.update_project()
 		update_linked_doc(self.doctype, self.name, self.inter_company_invoice_reference)
 
-		if self.coupon_code:
+		if self.coupon_code and self.counts_coupon_use():
 			update_coupon_code_count(self.coupon_code, "used")
 
 		if (
@@ -553,7 +553,7 @@ class SalesInvoice(SellingController):
 
 		self.db_set("status", "Cancelled")
 
-		if self.coupon_code:
+		if self.coupon_code and self.counts_coupon_use():
 			update_coupon_code_count(self.coupon_code, "cancelled")
 
 		if frappe.get_single_value("Selling Settings", "sales_update_frequency") == "Each Transaction":
@@ -1186,6 +1186,18 @@ class SalesInvoice(SellingController):
 		if self.needs_repost:
 			self.validate_for_repost()
 			self.repost_accounting_entries()
+
+	def counts_coupon_use(self):
+		# The Sales Order or POS Invoice this invoice comes from already validated and
+		# counted the coupon on submit, and a return is not a new use of it
+		if self.is_return or self.get("is_consolidated"):
+			return False
+
+		sales_orders = {item.sales_order for item in self.items if item.get("sales_order")}
+		return not sales_orders or not frappe.db.exists(
+			"Sales Order",
+			{"name": ("in", list(sales_orders)), "coupon_code": self.coupon_code, "docstatus": 1},
+		)
 
 	def set_status(self, update=False, status=None, update_modified=True):
 		StatusService(self).set_status(update, status, update_modified)
