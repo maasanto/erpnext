@@ -4487,6 +4487,37 @@ class TestSalesInvoice(ERPNextTestSuite):
 
 		set_advance_flag(company="_Test Company", flag=0, default_account="")
 
+	def test_credit_note_against_invoice_settled_by_advance(self):
+		from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+		from erpnext.accounts.doctype.sales_invoice.mapper import make_sales_return
+		from erpnext.selling.doctype.sales_order.mapper import make_sales_invoice as make_si_from_so
+		from erpnext.selling.doctype.sales_order.test_sales_order import make_sales_order
+
+		# billing half the order leaves part of the advance open, which the credit note must not pick up
+		for billed_qty in (2, 1):
+			with self.subTest(billed_qty=billed_qty):
+				so = make_sales_order(qty=2, rate=100)
+
+				advance = get_payment_entry("Sales Order", so.name, bank_account="_Test Bank - _TC")
+				advance.reference_no = "ADVANCE-RETURN"
+				advance.reference_date = nowdate()
+				advance.submit()
+
+				si = make_si_from_so(so.name)
+				si.items[0].qty = billed_qty
+				si.allocate_advances_automatically = 1
+				si.insert()
+				si.submit()
+				self.assertEqual(si.advances[0].reference_name, advance.name)
+				self.assertEqual(si.outstanding_amount, 0)
+
+				credit_note = make_sales_return(si.name)
+				credit_note.insert()
+				credit_note.submit()
+
+				self.assertEqual(credit_note.advances, [])
+				self.assertEqual(credit_note.outstanding_amount, -100 * billed_qty)
+
 	@ERPNextTestSuite.change_settings("Selling Settings", {"customer_group": None, "territory": None})
 	def test_sales_invoice_without_customer_group_and_territory(self):
 		# create a customer
